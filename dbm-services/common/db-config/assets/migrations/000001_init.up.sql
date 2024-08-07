@@ -1,3 +1,1 @@
 SET NAMES utf8;
--- CREATE DATABASE IF NOT EXISTS `bk_dbconfig` DEFAULT CHARACTER SET utf8;
--- USE `bk_dbconfig`;
