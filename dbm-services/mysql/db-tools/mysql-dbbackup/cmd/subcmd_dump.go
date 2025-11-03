@@ -454,7 +454,7 @@ func prepareBackupToRemote(cnf *config.BackupConfig, sshClient *sshgo.Client) (e
 	_, _ = sshClient.Run("chmod +x " + remoteNcStarterScriptName)
 	// 如果目标机器 dbbackup-go 介质不存在，传输过去
 	if output, err := sshClient.Run("ls " + remoteDbbackupBin); err != nil {
-		if !strings.Contains(string(output), "No such file or directory") {
+		if !strings.Contains(strings.ToLower(string(output)), "No such file or directory") {
 			return errors.WithMessagef(err, "check bin exists %s, output: %s", remoteDbbackupBin, string(output))
 		}
 		logger.Log.Infof("dbbackup not found, try to send it to remote")

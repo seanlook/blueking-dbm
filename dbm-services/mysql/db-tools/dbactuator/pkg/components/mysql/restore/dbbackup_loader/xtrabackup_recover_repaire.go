@@ -11,6 +11,7 @@
 package dbbackup_loader
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -259,7 +260,7 @@ func (x *Xtrabackup) RepairPrivileges() error {
 	sql4 := fmt.Sprintf("flush privileges;")
 	batchSQLs = append(batchSQLs, sql4)
 	logger.Info("RepairPrivileges: %+v", batchSQLs)
-	if _, err := x.dbWorker.ExecMore(batchSQLs); err != nil {
+	if _, err := x.dbWorker.ExecMoreContext(batchSQLs, false, context.Background()); err != nil {
 		return err
 	}
 	return nil

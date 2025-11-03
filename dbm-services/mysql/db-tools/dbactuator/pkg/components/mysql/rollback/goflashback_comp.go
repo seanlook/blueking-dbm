@@ -48,7 +48,6 @@ type GoFlashback struct {
 	ParseConcurrency int `json:"parse_concurrency"`
 	// DirectWriteBack 直接回写原 db
 	DirectWriteBack bool `json:"direct_write_back"`
-
 	// binlog 下载到哪个目录
 	binlogSaveDir string
 	dbWorker      *native.DbWorker

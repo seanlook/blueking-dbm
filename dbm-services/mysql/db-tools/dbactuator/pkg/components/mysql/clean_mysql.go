@@ -158,6 +158,10 @@ func (c *CleanMysqlComp) Start() error {
 				return err
 			}
 		}
+		// drop database 非事务性的，关闭外键检查
+		if _, err = dbConn.ExecContext(ctx, "SET foreign_key_checks=0;"); err != nil {
+			return err
+		}
 		for _, dbName := range databases {
 			dropSQL := fmt.Sprintf("DROP DATABASE `%s`;", dbName["SCHEMA_NAME"])
 			logger.Warn("run sql %s", dropSQL)

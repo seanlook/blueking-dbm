@@ -117,11 +117,12 @@ func (h *DbWorker) ExecWithTimeout(dura time.Duration, query string, args ...int
 // 空元素会跳过
 func (h *DbWorker) ExecMore(sqls []string) (rowsAffectedCount int64, err error) {
 	ctx := context.Background()
-	return h.ExecMoreContext(sqls, ctx)
+	return h.ExecMoreContext(sqls, false, ctx)
 }
 
 // ExecMoreContext 在同一个连接里执行多个sql
-func (h *DbWorker) ExecMoreContext(sqls []string, ctx context.Context) (rowsAffected int64, err error) {
+// force 是否强制执行
+func (h *DbWorker) ExecMoreContext(sqls []string, force bool, ctx context.Context) (rowsAffected int64, err error) {
 	var c int64
 	db, err := h.Db.Conn(ctx)
 	if err != nil {
@@ -134,10 +135,17 @@ func (h *DbWorker) ExecMoreContext(sqls []string, ctx context.Context) (rowsAffe
 		}
 		ret, err := db.ExecContext(ctx, sqlStr)
 		if err != nil {
-			return rowsAffected, fmt.Errorf("exec %s failed,err:%w", sqlStr, err)
-		}
-		if c, err = ret.RowsAffected(); err != nil {
-			return rowsAffected, fmt.Errorf("exec %s failed,err:%w", sqlStr, err)
+			if force {
+				logger.Warn("exec %s failed, err:%s", sqlStr, err.Error())
+			} else {
+				return rowsAffected, fmt.Errorf("exec %s failed,err:%w", sqlStr, err)
+			}
+		} else if c, err = ret.RowsAffected(); err != nil {
+			if force {
+				logger.Warn("exec %s failed, err:%s", sqlStr, err.Error())
+			} else {
+				return rowsAffected, fmt.Errorf("exec %s failed,err:%w", sqlStr, err)
+			}
 		}
 		rowsAffected += c
 	}

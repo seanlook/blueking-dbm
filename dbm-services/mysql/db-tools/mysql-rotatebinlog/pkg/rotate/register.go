@@ -42,7 +42,7 @@ func (i *ServerObj) RegisterOneBinlog(binlogDir string, fileName string, backupE
 	if err != nil {
 		logger.Warn("binlog %s GetTime failed: %s,events:%+v. use stop_time use start_time",
 			fileName, err.Error(), events)
-		if strings.Contains(err.Error(), "no such file or directory") {
+		if strings.Contains(strings.ToLower(err.Error()), "no such file or directory") {
 			backupStatus = models.FileStatusForceRemoved
 			backupStatusInfo = "register failed"
 		} else if len(events) > 0 {

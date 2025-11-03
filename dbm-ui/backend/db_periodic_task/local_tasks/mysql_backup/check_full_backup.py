@@ -20,11 +20,10 @@ from django.utils import timezone
 
 from backend.db_meta.enums import ClusterType
 from backend.db_meta.models import Cluster
+from backend.db_periodic_task.local_tasks.mysql_backup.bklog_query import ClusterBackup
 from backend.db_report.enums import MysqlBackupCheckSubType, ReportStateType
 from backend.db_report.models import MysqlBackupCheckReport, MysqlBackupProgress
 from backend.db_report.models.mysql_backup_result import MysqlBackupResult
-
-from .bklog_query import ClusterBackup
 
 logger = logging.getLogger("root")
 

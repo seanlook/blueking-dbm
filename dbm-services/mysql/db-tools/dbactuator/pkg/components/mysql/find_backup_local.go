@@ -114,7 +114,7 @@ func (f *FindLocalBackupParam) StartOld() error {
 		out, err := osutil.ExecShellCommand(false, script)
 		if err != nil {
 			logger.Warn("find error %w", err)
-			if strings.Contains(out, "No such file or directory") { // 如果是 No such file or directory, 则忽略
+			if strings.Contains(strings.ToLower(out), "no such file or directory") { // 如果是 No such file or directory, 则忽略
 				continue
 			}
 			return err
@@ -172,7 +172,7 @@ func (f *FindLocalBackupParam) Start() error {
 		out, err := osutil.ExecShellCommand(false, script)
 		if err != nil {
 			logger.Warn("find error %w", err)
-			if strings.Contains(out, "No such file or directory") { // 如果是 No such file or directory, 则忽略
+			if strings.Contains(strings.ToLower(out), "no such file or directory") { // 如果是 No such file or directory, 则忽略
 				continue
 			}
 			return err

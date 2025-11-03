@@ -68,6 +68,7 @@ def mysql_backup_failed_alert():
         time.sleep(0.01)  # 避免请求过快
         BKMonitorV3EventApi.send_event([event])
 
+    # 按集群发送备份执行失败的群通知
     db_type = "mysql"
     msg_type = MsgType.WECOM_ROBOT
     notice_cfg = SystemSettings.get_setting_value(SystemSettingsEnum.BKM_DUTY_NOTICE.value, default={}).get(db_type)
