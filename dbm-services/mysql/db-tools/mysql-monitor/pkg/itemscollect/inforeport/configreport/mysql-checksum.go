@@ -33,7 +33,7 @@ func ReportChecksumConfig(dbPort int, db *pkg.MySQLMonitorDBH) error {
 		Host:      config.MonitorConfig.Ip,
 		Port:      dbPort,
 		ConfType:  "checksum",
-		ConfFile:  confFile,
+		ConfFile:  "checksum.yaml",
 		ConfigKey: "",
 	}
 

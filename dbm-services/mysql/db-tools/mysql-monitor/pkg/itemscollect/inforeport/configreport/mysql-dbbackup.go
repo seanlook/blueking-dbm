@@ -29,8 +29,8 @@ func ReportDbbackupConfig(dbPort int, db *pkg.MySQLMonitorDBH) error {
 	cfg := &ModelLocalConfig{
 		Host:      config.MonitorConfig.Ip,
 		Port:      dbPort,
-		ConfType:  "dbbackup",
-		ConfFile:  confFile,
+		ConfType:  "backup",
+		ConfFile:  "dbbackup.ini",
 		ConfigKey: "",
 	}
 

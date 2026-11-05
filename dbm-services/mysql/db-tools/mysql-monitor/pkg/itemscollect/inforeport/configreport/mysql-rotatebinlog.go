@@ -29,8 +29,8 @@ func ReportRotatebinlogConfig(dbPort int, db *pkg.MySQLMonitorDBH) error {
 	cfg := &ModelLocalConfig{
 		Host:      config.MonitorConfig.Ip,
 		Port:      0, // 主机级配置，port 固定为 0
-		ConfType:  "rotatebinlog",
-		ConfFile:  confFile,
+		ConfType:  "backup",
+		ConfFile:  "binlog_rotate.yaml",
 		ConfigKey: "",
 	}
 

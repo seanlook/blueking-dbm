@@ -14,7 +14,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.components import DRSApi
-from backend.components.dbconfig.constants import ConfFile
+from backend.components.dbconfig.constants import ConfFile, ConfType
 from backend.db_meta.enums import ClusterType, InstanceRole, InstanceStatus
 from backend.db_meta.models import Cluster
 from backend.utils.batch_request import request_multi_thread
@@ -36,13 +36,14 @@ FLAG_DIFF_DIFFERENT = 1  # 运行时与配置不一致
 # local_config 中脱敏后的值，无法比对
 MASKED_VALUE = "******"
 
-# dbconfig conf_file(version) -> local_config.conf_type
+# 支持运行时配置比对的 (conf_type, conf_file)
+# local_config 中的 conf_type/conf_file 与 dbconfig 的 ConfType/ConfFile 取值保持一致
 # dbbackup.options 没有具体的 local_config 实体，暂不处理
-CONF_FILE_LOCAL_CONF_TYPE = {
-    ConfFile.DBBACKUP_INI.value: "dbbackup",
-    ConfFile.BINLOG_ROTATE.value: "rotatebinlog",
-    ConfFile.CHECKSUM.value: "checksum",
-    ConfFile.ITEMS_CONFIG.value: "mysql-monitor",
+SUPPORTED_RUNTIME_CONF_FILES = {
+    (ConfType.BACKUP.value, ConfFile.DBBACKUP_INI.value),
+    (ConfType.BACKUP.value, ConfFile.BINLOG_ROTATE.value),
+    (ConfType.CHECKSUM.value, ConfFile.CHECKSUM.value),
+    (ConfType.MYSQL_MONITOR.value, ConfFile.ITEMS_CONFIG.value),
 }
 
 # 支持运行时配置的集群类型 -> 需要查询的实例角色
@@ -56,10 +57,11 @@ CLUSTER_RUNTIME_WITH_PROXY = [ClusterType.TenDBCluster]
 
 # 查询实例本机的 local_config
 # 主机级配置（如 rotatebinlog）port=0，实例级配置 port=实例端口，所以 port 匹配 (0, 实例端口)
-# 这里不会出现注入，所以参数都是从元数据查出的
+# 防注入: host/port 从元数据查出；conf_type/conf_file 来自前端，拼接前必须经 SUPPORTED_RUNTIME_CONF_FILES 白名单校验
 QUERY_LOCAL_CONFIG_SQL = (
     "SELECT host, port, conf_type, conf_file, config_value FROM infodba_schema.local_config "
-    "WHERE host = '{host}' AND port IN (0, {port}) AND conf_type = '{conf_type}'"
+    "WHERE host = '{host}' AND port IN (0, {port}) AND conf_type = '{conf_type}' AND conf_file = '{conf_file}' "
+    "AND updated_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)"
 )
 
 # DRS 查询超时时间（秒），页面接口要求快速返回，超时即视为未取得运行时配置（flag_difference=-1）
@@ -70,8 +72,28 @@ class ClusterRuntimeConfigError(Exception):
     pass
 
 
-def support_cluster_runtime(meta_cluster_type: str, conf_file: str) -> bool:
-    return meta_cluster_type in CLUSTER_RUNTIME_STORAGE_ROLES and conf_file in CONF_FILE_LOCAL_CONF_TYPE
+def support_cluster_runtime(meta_cluster_type: str, conf_type: str, conf_file: str) -> bool:
+    return (
+        meta_cluster_type in CLUSTER_RUNTIME_STORAGE_ROLES
+        and (str(conf_type), str(conf_file)) in SUPPORTED_RUNTIME_CONF_FILES
+    )
+
+
+def _check_runtime_conf(conf_type: str, conf_file: str) -> Tuple[str, str]:
+    """白名单校验 conf_type/conf_file，只有枚举中定义的值才允许拼接进 SQL"""
+    conf_type, conf_file = str(conf_type), str(conf_file)
+    if (conf_type, conf_file) not in SUPPORTED_RUNTIME_CONF_FILES:
+        raise ClusterRuntimeConfigError(f"unsupported runtime config: {conf_type}/{conf_file}")
+    return conf_type, conf_file
+
+
+def _construct_local_config_sql(ip: str, port: int, conf_type: str, conf_file: str) -> str:
+    """
+    构造查询实例本机 local_config 的 SQL
+    conf_type/conf_file 来自前端，拼接前先做白名单校验，防止 SQL 注入
+    """
+    conf_type, conf_file = _check_runtime_conf(conf_type, conf_file)
+    return QUERY_LOCAL_CONFIG_SQL.format(host=ip, port=int(port), conf_type=conf_type, conf_file=conf_file)
 
 
 def _flatten(prefix: str, value: Any, result: Dict[str, Any], max_depth: int = 1):
@@ -120,34 +142,38 @@ def _cluster_instance_addresses(cluster: Cluster) -> List[Tuple[str, int]]:
     return sorted(set(instances))
 
 
-def query_cluster_runtime_config(cluster: Cluster, conf_file: str) -> List[Dict[str, Any]]:
+def query_cluster_runtime_config(cluster: Cluster, conf_type: str, conf_file: str) -> List[Dict[str, Any]]:
     """
-    查询集群所有实例的运行时配置，SQL 按 host/port/conf_type 过滤，逐实例并发查询
+    查询集群所有实例的运行时配置，SQL 按 host/port/conf_type/conf_file 过滤，逐实例并发查询
     返回: [{"address": "ip:port", "config": {conf_name: raw_value}}, ...]
-    任何实例查询失败都抛异常；实例上没有对应 conf_type 的记录则跳过
+    任何实例查询失败都抛异常；实例上没有对应 conf_type/conf_file 的记录则跳过
     """
-    conf_type = CONF_FILE_LOCAL_CONF_TYPE[conf_file]
+    conf_type, conf_file = _check_runtime_conf(conf_type, conf_file)
     instances = _cluster_instance_addresses(cluster)
     if not instances:
         raise ClusterRuntimeConfigError(f"cluster {cluster.immute_domain} has no instance to query")
 
     params_list = [
-        {"bk_cloud_id": cluster.bk_cloud_id, "ip": ip, "port": port, "conf_type": conf_type} for ip, port in instances
+        {"bk_cloud_id": cluster.bk_cloud_id, "ip": ip, "port": port, "conf_type": conf_type, "conf_file": conf_file}
+        for ip, port in instances
     ]
     # 并发查询所有实例，每个实例的请求各自带 host/port（local_config 只存本机数据）
     results = request_multi_thread(func=_query_instance_runtime_config, params_list=params_list, get_data=lambda x: x)
     runtime_configs = [r for r in results if r]
     if not runtime_configs:
-        raise ClusterRuntimeConfigError(f"no local_config found for conf_type: {conf_type}")
+        raise ClusterRuntimeConfigError(f"no local_config found for conf_type: {conf_type}, conf_file: {conf_file}")
     return runtime_configs
 
 
-def _query_instance_runtime_config(bk_cloud_id: int, ip: str, port: int, conf_type: str) -> Optional[Dict[str, Any]]:
+def _query_instance_runtime_config(
+    bk_cloud_id: int, ip: str, port: int, conf_type: str, conf_file: str
+) -> Optional[Dict[str, Any]]:
     """
     查询单个实例的 local_config，实例上没有对应记录时返回 None
+    conf_type/conf_file 取值与 ConfType/ConfFile 枚举对齐（如 backup/dbbackup.ini、checksum/checksum.yaml）
     """
     address = f"{ip}:{port}"
-    sql = QUERY_LOCAL_CONFIG_SQL.format(host=ip, port=port, conf_type=conf_type)
+    sql = _construct_local_config_sql(ip, port, conf_type, conf_file)
 
     rpc_results = DRSApi.v2_short_rpc(
         {"bk_cloud_id": bk_cloud_id, "addresses": [address], "cmds": [sql], "force": False},
