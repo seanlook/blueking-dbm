@@ -27,7 +27,7 @@
   type: doris_http
   dsn:
     address: "1.1.1.1:9030"
-    fe_http_address: ""
+    fe_http_address: "1.1.1.1:8030"
     user: "******"
     password: "******"
     database: "bk_dbm_stats"

@@ -110,8 +110,11 @@ type RecoverBinlog struct {
 	tools.ToolSet
 
 	// /WorkDir/WorkID/
-	taskDir         string
-	dbWorker        *native.DbWorker // TgtInstance
+	taskDir  string
+	dbWorker *native.DbWorker // TgtInstance
+	// mysqlClientBin, mysqlbinlogBin 根据 mysql server 版本选出的工具路径，见 pickMysqlToolsByServerVersion
+	mysqlClientBin  string
+	mysqlbinlogBin  string
 	binlogCli       string
 	mysqlCli        string
 	filterOpts      string
@@ -261,7 +264,7 @@ exit $retcode
 			"dbUser":          r.TgtInstance.User,
 			"dbPass":          r.TgtInstance.Pwd,
 			"mysqlOpt":        "--max-allowed-packet=1073741824",
-			"mysqlCmd":        r.ToolSet.MustGet(tools.ToolMysqlclient),
+			"mysqlCmd":        r.mysqlClientBin,
 			"dirBinlogParsed": dirBinlogParsed,
 			"sqlFiles":        strings.Join(r.BinlogFiles, " "),
 		}
@@ -283,6 +286,9 @@ func (r *RecoverBinlog) Init() error {
 	if err = r.ToolSet.Merge(toolset); err != nil {
 		return err
 	}
+	// 根据 mysql server 版本，选择 mysql、mysqlbinlog 工具
+	r.mysqlClientBin, r.mysqlbinlogBin = pickMysqlToolsByServerVersion(
+		getMysqlServerVersion(r.dbWorker, &r.TgtInstance))
 
 	// 校验全备的库过滤条件，有库过滤时不允许用 mysqlbinlog 前滚
 	if err = r.buildFilterFromBackupIndex(); err != nil {
@@ -296,7 +302,7 @@ func (r *RecoverBinlog) Init() error {
 	}
 	// quick_mode=true 需要 mysqlbinlog 支持 --databases --tables 等选项
 	if r.QuickMode && !r.RecoverOpt.Flashback {
-		mysqlbinlogCli := r.ToolSet.MustGet(tools.ToolMysqlbinlog)
+		mysqlbinlogCli := r.mysqlbinlogBin
 		checkMysqlbinlog := fmt.Sprintf(`%s --help |grep "\-\-tables="`, mysqlbinlogCli)
 		if _, err := mysqlutil.ExecCommandMySQLShell(checkMysqlbinlog); err != nil {
 			r.QuickMode = false
@@ -345,7 +351,7 @@ func (r *RecoverBinlog) Init() error {
 		if err != nil {
 			return errors.Wrap(err, "目标实例连接失败")
 		}
-		if ret, err := r.TgtInstance.MySQLClientExec(r.ToolSet.MustGet(tools.ToolMysqlclient), "select 1"); err != nil {
+		if ret, err := r.TgtInstance.MySQLClientExec(r.mysqlClientBin, "select 1"); err != nil {
 			return err
 		} else if strings.Contains(ret, "ERROR ") {
 			logger.Error("MySQLClientExec failed: %w %s", ret, err)
@@ -377,6 +383,73 @@ func (r *RecoverBinlog) Init() error {
 	return nil
 }
 
+// pickMysqlToolsByServerVersion 根据 mysql server 版本，返回要使用的 mysql、mysqlbinlog 路径。
+// 系统自带的 /usr/local/mysql/bin/{mysql,mysqlbinlog} 与 mysqld 同版本，低版本有 bug(比如 5.5 的 mysqlbinlog)；
+// dba-toolkit 下的 mysql、mysqlbinlog 是基于 5.7 的增强修复版本，不能用于 8.0。所以：
+//   - server >= 8.0：返回系统自带的 /usr/local/mysql/bin/ 下的工具
+//   - server <= 5.7(或版本获取失败)：返回 dba-toolkit 下的工具，不可用时回退到系统自带
+func pickMysqlToolsByServerVersion(serverVersion string) (mysqlClient, mysqlbinlog string) {
+	sysMysqlClient := tools.GetDefaultPath(tools.ToolMysqlclient)
+	sysMysqlbinlog := tools.GetDefaultPath(tools.ToolMysqlbinlog)
+	if serverVersion == "" {
+		logger.Warn("unknown mysql server version, use system tools %s, %s", sysMysqlClient, sysMysqlbinlog)
+		return sysMysqlClient, sysMysqlbinlog
+	} else if cmutil.MySQLVersionParse(serverVersion) >= cmutil.MySQLVersionParse("8.0.0") {
+		logger.Info("mysql server version %s >= 8.0, use system tools %s, %s",
+			serverVersion, sysMysqlClient, sysMysqlbinlog)
+		return sysMysqlClient, sysMysqlbinlog
+	}
+	mysqlClient = pickToolkitToolOrFallback(tools.ToolMysqlclient57, sysMysqlClient)
+	mysqlbinlog = pickToolkitToolOrFallback(tools.ToolMysqlbinlog57, sysMysqlbinlog)
+	logger.Info("mysql server version [%s] <= 5.7, use tools %s, %s", serverVersion, mysqlClient, mysqlbinlog)
+	return mysqlClient, mysqlbinlog
+}
+
+// pickToolkitToolOrFallback dba-toolkit 下的工具存在且可执行时返回它，否则返回 fallbackPath
+func pickToolkitToolOrFallback(toolkitTool tools.ExternalTool, fallbackPath string) string {
+	toolkitPath := tools.GetDefaultPath(toolkitTool)
+	if toolkitPath == "" {
+		logger.Warn("tool %s has no registered path, fallback to %s", toolkitTool, fallbackPath)
+		return fallbackPath
+	} else if !osutil.FileExist(toolkitPath) {
+		logger.Warn("%s not found, fallback to %s", toolkitPath, fallbackPath)
+		return fallbackPath
+	}
+	// mysql、mysqlbinlog 都支持 --help，用它确认工具可以正常执行(担心与 os 版本 so 不兼容等问题)
+	if err := mysqlcomm.MysqlCliHasOption(toolkitPath, "--help"); err != nil {
+		logger.Warn("cannot run %s, fallback to %s: %s", toolkitPath, fallbackPath, err.Error())
+		return fallbackPath
+	}
+	return toolkitPath
+}
+
+// getMysqlServerVersion 获取目标实例的 mysql server 版本，获取失败返回空
+// 实例连不上时，用系统自带 mysql client 的版本代替(/usr/local/mysql 下的客户端与 mysqld 是同一个安装包)
+func getMysqlServerVersion(dbWorker *native.DbWorker, tgtInstance *native.InsObject) string {
+	if dbWorker == nil {
+		if conn, err := tgtInstance.Conn(); err != nil {
+			logger.Warn("connect target instance to get mysql version failed: %s", err.Error())
+		} else {
+			defer conn.Stop()
+			dbWorker = conn
+		}
+	}
+	if dbWorker != nil {
+		if serverVersion, err := dbWorker.SelectVersion(); err != nil {
+			logger.Warn("get mysql server version failed: %s", err.Error())
+		} else {
+			return serverVersion
+		}
+	}
+	sysMysqlCli := tools.GetDefaultPath(tools.ToolMysqlclient)
+	if cliVersion, err := mysqlcomm.MysqlCliVersion(sysMysqlCli); err != nil {
+		logger.Warn("get mysql version from %s failed: %s", sysMysqlCli, err.Error())
+	} else {
+		return cliVersion
+	}
+	return ""
+}
+
 func (r *RecoverBinlog) buildMysqlOptions() error {
 	b := r.RecoverOpt
 	mysqlOpt := r.RecoverOpt.MySQLClientOpt
@@ -394,21 +467,10 @@ func (r *RecoverBinlog) buildMysqlOptions() error {
 		r.TgtInstance.Options += fmt.Sprintf(" --max-allowed-packet=%d", mysqlOpt.MaxAllowedPacket)
 	}
 
-	var mysqlClient string
-	if mysqlClient80, err := r.ToolSet.Get(tools.ToolMysqlclient80); err == nil {
-		// 需要确认 dba-toolkit 下的 mysql 8.0 客户端可以用
-		if err = mysqlcomm.MysqlCliHasOption(mysqlClient80, "--help"); err == nil {
-			mysqlClient = mysqlClient80
-		} else {
-			logger.Info("try use mysql client 8.0 got error:", err.Error())
-		}
-	}
-	if mysqlClient == "" {
-		mysqlClient = r.ToolSet.MustGet(tools.ToolMysqlclient)
-		logger.Info("fallback to system mysql client: %s", mysqlClient)
-	}
-	// mysqlOpt.BinaryMode &&
+	// mysql client 已在 Init 里根据 mysql server 版本选择好
+	mysqlClient := r.mysqlClientBin
 	// mysql 8.0 客户端 在 --binary-mode 下执行 DELIMITER 会报错，所以 8.0 客户端不加 --binary-mode
+	// 注意这里看的是 mysql client 版本
 	cliVersion, err := mysqlcomm.MysqlCliVersion(mysqlClient)
 	if err != nil {
 		logger.Warn("get mysql client version failed: %s", err.Error())
@@ -472,7 +534,8 @@ func (r *RecoverBinlog) buildBinlogOptions() error {
 	if r.RecoverOpt.Flashback {
 		binlogTool = r.ToolSet.MustGet(tools.ToolMysqlbinlogRollback)
 	} else {
-		binlogTool = r.ToolSet.MustGet(tools.ToolMysqlbinlog)
+		// mysqlbinlog 已在 Init 里根据 mysql server 版本选择好
+		binlogTool = r.mysqlbinlogBin
 	}
 	if *b.SkipGtids && mysqlcomm.MysqlbinlogHasOpt(binlogTool, "--skip-gtids") == nil {
 		b.options += fmt.Sprintf(" --skip-gtids")
@@ -551,31 +614,18 @@ func (r *RecoverBinlog) buildFilterOpts(simpleFilter bool) error {
 	r.filterOpts = ""
 	if b.Flashback {
 		r.filterOpts += " --flashback"
-		if len(b.Databases) > 0 {
-			r.filterOpts += fmt.Sprintf(" --flashback-databases='%s'", strings.Join(b.Databases, ","))
-		}
-		if len(b.Tables) > 0 {
-			r.filterOpts += fmt.Sprintf(" --flashback-tables='%s'", strings.Join(b.Tables, ","))
-		}
-		if len(b.DatabasesIgnore) > 0 {
-			r.filterOpts += fmt.Sprintf(" --flashback-databases-ignore='%s'", strings.Join(b.DatabasesIgnore, ","))
-		}
-		if len(b.TablesIgnore) > 0 {
-			r.filterOpts += fmt.Sprintf(" --flashback-tables-ignore='%s'", strings.Join(b.TablesIgnore, ","))
-		}
-	} else {
-		if len(b.Databases) > 0 {
-			r.filterOpts += fmt.Sprintf(" --databases='%s'", strings.Join(b.Databases, ","))
-		}
-		if len(b.Tables) > 0 {
-			r.filterOpts += fmt.Sprintf(" --tables='%s'", strings.Join(b.Tables, ","))
-		}
-		if len(b.DatabasesIgnore) > 0 {
-			r.filterOpts += fmt.Sprintf(" --databases-ignore='%s'", strings.Join(b.DatabasesIgnore, ","))
-		}
-		if len(b.TablesIgnore) > 0 {
-			r.filterOpts += fmt.Sprintf(" --tables-ignore='%s'", strings.Join(b.TablesIgnore, ","))
-		}
+	}
+	if len(b.Databases) > 0 {
+		r.filterOpts += fmt.Sprintf(" --databases='%s'", strings.Join(b.Databases, ","))
+	}
+	if len(b.Tables) > 0 {
+		r.filterOpts += fmt.Sprintf(" --tables='%s'", strings.Join(b.Tables, ","))
+	}
+	if len(b.DatabasesIgnore) > 0 {
+		r.filterOpts += fmt.Sprintf(" --databases-ignore='%s'", strings.Join(b.DatabasesIgnore, ","))
+	}
+	if len(b.TablesIgnore) > 0 {
+		r.filterOpts += fmt.Sprintf(" --tables-ignore='%s'", strings.Join(b.TablesIgnore, ","))
 	}
 
 	if r.filterOpts == "" {

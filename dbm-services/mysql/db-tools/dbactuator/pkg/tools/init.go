@@ -11,21 +11,15 @@ import (
 type ExternalTool string
 
 const (
-	// ToolMysqlbinlog mysqlbinlog
-	ToolMysqlbinlog ExternalTool = "mysqlbinlog"
-	// ToolMload mload
-	ToolMload ExternalTool = "mload"
-	// ToolMysqlclient mysql
+	// ToolMysqlclient mysql 系统自带的 mysql 客户端，与 mysqld 同版本
 	ToolMysqlclient ExternalTool = "mysql"
-	// ToolMysqlclient80 mysql80
-	ToolMysqlclient80 ExternalTool = "mysql80"
-	// ToolXLoad xload
-	ToolXLoad ExternalTool = "xload"
-	// ToolQPress qpress
-	ToolQPress ExternalTool = "qpress"
-	ToolZstd   ExternalTool = "gozstd"
-	// ToolPv pv
-	ToolPv ExternalTool = "pv"
+	// ToolMysqlbinlog mysql 系统自带的 mysqlbinlog (/usr/local/mysql/...)
+	ToolMysqlbinlog ExternalTool = "mysqlbinlog"
+	// ToolMysqlclient57 mysql57 dba-toolkit 下基于 5.7 增强修复的 mysql 客户端
+	ToolMysqlclient57 ExternalTool = "mysql57"
+	// ToolMysqlbinlog57 mysqlbinlog57 dba-toolkit 下基于 5.7 增强修复的 mysqlbinlog
+	ToolMysqlbinlog57 ExternalTool = "mysqlbinlog57"
+
 	// ToolMysqlbinlogRollback mysqlbinlog_rollback
 	ToolMysqlbinlogRollback ExternalTool = "mysqlbinlog_rollback"
 	// ToolMysqlbinlogRollback80 mysqlbinlog_rollback80
@@ -45,6 +39,15 @@ const (
 	ToolMySQLCrond ExternalTool = "mysql-crond"
 	// ToolMySQLMonitor mysql monitor
 	ToolMySQLMonitor ExternalTool = "mysql-monitor"
+	// ToolMload mload
+	ToolMload ExternalTool = "mload"
+	// ToolXLoad xload
+	ToolXLoad ExternalTool = "xload"
+	// ToolQPress qpress
+	ToolQPress ExternalTool = "qpress"
+	ToolZstd   ExternalTool = "gozstd"
+	// ToolPv pv
+	ToolPv ExternalTool = "pv"
 )
 
 // defaultPath defaults path
@@ -54,9 +57,10 @@ var defaultPath = map[ExternalTool]string{
 	ToolQPress:                "/home/mysql/dbbackup-go/bin/qpress",
 	ToolZstd:                  "/home/mysql/dbbackup-go/bin/gozstd",
 	ToolPv:                    "/home/mysql/dbbackup-go/bin/pv",
-	ToolMysqlclient:           "/usr/local/mysql/bin/mysql",
-	ToolMysqlbinlog:           "/usr/local/mysql/bin/mysqlbinlog",
-	ToolMysqlclient80:         filepath.Join(cst.DBAToolkitPath, string(ToolMysqlclient)),
+	ToolMysqlclient:           filepath.Join("/usr/local/mysql/bin", "mysql"),
+	ToolMysqlbinlog:           filepath.Join("/usr/local/mysql/bin", "mysqlbinlog"),
+	ToolMysqlclient57:         filepath.Join(cst.DBAToolkitPath, "mysql"),
+	ToolMysqlbinlog57:         filepath.Join(cst.DBAToolkitPath, "mysqlbinlog"),
 	ToolGoMysqlbinlog:         filepath.Join(cst.DBAToolkitPath, string(ToolGoMysqlbinlog)),
 	ToolMysqlbinlogRollback:   filepath.Join(cst.DBAToolkitPath, string(ToolMysqlbinlogRollback)),
 	ToolMysqlbinlogRollback80: filepath.Join(cst.DBAToolkitPath, "mysqlbinlog_rollback80"),

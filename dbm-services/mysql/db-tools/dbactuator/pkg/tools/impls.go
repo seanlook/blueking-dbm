@@ -36,3 +36,8 @@ func (s *ToolSet) MustGet(tool ExternalTool) string {
 	err := errors.Errorf("%s not registered or picked", tool)
 	panic(err)
 }
+
+// GetDefaultPath 获得工具的默认路径，未注册的工具返回空字符串
+func GetDefaultPath(tool ExternalTool) string {
+	return defaultPath[tool]
+}

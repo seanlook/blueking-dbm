@@ -18,15 +18,16 @@ func CloneModuleConfig(r *api.CloneModuleConfigReq, opUser string, db *gorm.DB) 
 	sb.InsertIgnoreInto((&model.ConfigModel{}).TableName()).Cols(
 		"bk_biz_id", "level_value", "conf_file",
 		"namespace", "conf_type", "conf_name", "conf_value", "level_name")
-	insertSelect := sb.Select(
-		"'"+r.TargetBkBizID+"'",
-		"'"+r.TargetModuleID+"'",
-		"'"+r.TargetConfFile+"'",
-		"namespace", "conf_type", "conf_name", "conf_value", "level_name",
-	).From((&model.ConfigModel{}).TableName())
-	insertSelect.Where(fmt.Sprintf("level_name='module' and namespace = '%s' and conf_type = '%s'",
-		r.Namespace, r.ConfType))
+	insertSelect := sb.Select().From((&model.ConfigModel{}).TableName())
+	insertSelect.SelectMore(
+		insertSelect.Var(r.TargetBkBizID),
+		insertSelect.Var(r.TargetModuleID),
+		insertSelect.Var(r.TargetConfFile),
+		"namespace", "conf_type", "conf_name", "conf_value", "level_name")
 	insertSelect.Where(
+		insertSelect.Equal("level_name", "module"),
+		insertSelect.Equal("namespace", r.Namespace),
+		insertSelect.Equal("conf_type", r.ConfType),
 		insertSelect.Equal("bk_biz_id", r.SourceBkBizID),
 		insertSelect.Equal("level_value", r.SourceModuleID),
 		insertSelect.Equal("conf_file", r.SourceConfFile))
@@ -69,17 +70,18 @@ func CloneClusterConfig(r *api.CloneClusterConfigReq, opUser string, db *gorm.DB
 		sb2.InsertIgnoreInto((&model.ConfigModel{}).TableName()).Cols(
 			"bk_biz_id", "level_value", "conf_file",
 			"namespace", "conf_type", "conf_name", "conf_value", "level_name")
-		insertSelect2 := sb2.Select(
-			"'"+r.TargetBkBizID+"'",
+		insertSelect2 := sb2.Select().From((&model.ConfigModel{}).TableName())
+		insertSelect2.SelectMore(
+			insertSelect2.Var(r.TargetBkBizID),
 			"level_value",
-			"'"+r.TargetConfFile+"'",
-			"namespace", "conf_type", "conf_name", "conf_value", "level_name",
-		).From((&model.ConfigModel{}).TableName())
-		insertSelect2.Where(fmt.Sprintf("level_name='cluster' and namespace = '%s' and conf_type = '%s'",
-			r.Namespace, r.ConfType))
+			insertSelect2.Var(r.TargetConfFile),
+			"namespace", "conf_type", "conf_name", "conf_value", "level_name")
 		insertSelect2.Where(
+			insertSelect2.Equal("level_name", "cluster"),
+			insertSelect2.Equal("namespace", r.Namespace),
+			insertSelect2.Equal("conf_type", r.ConfType),
 			insertSelect2.Equal("bk_biz_id", r.SourceBkBizID),
-			insertSelect2.In("level_value", r.ClusterDomains),
+			insertSelect2.In("level_value", sqlbuilder.Flatten(r.ClusterDomains)...),
 			insertSelect2.Equal("conf_file", r.SourceConfFile))
 		sql, args := sb2.Build()
 		logger.Infof("clone cluster config sql: %v, %v", sql, args)

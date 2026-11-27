@@ -118,8 +118,10 @@ type GoApplyBinlog struct {
 	tools.ToolSet
 
 	// /WorkDir/WorkID/
-	taskDir         string
-	dbWorker        *native.DbWorker // TgtInstance
+	taskDir  string
+	dbWorker *native.DbWorker // TgtInstance
+	// mysqlClientBin 根据 mysql server 版本选出的 mysql 客户端路径，见 pickMysqlToolsByServerVersion
+	mysqlClientBin  string
 	mysqlCli        string
 	importScript    string
 	parseScript     string
@@ -282,7 +284,7 @@ exit $retcode
 			"dbUser":          r.TgtInstance.User,
 			"dbPass":          r.TgtInstance.Pwd,
 			"mysqlOpt":        "--max-allowed-packet=1073741824",
-			"mysqlCmd":        r.ToolSet.MustGet(tools.ToolMysqlclient),
+			"mysqlCmd":        r.mysqlClientBin,
 			"dirBinlogParsed": dirBinlogParsed,
 			"sqlFiles":        strings.Join(r.BinlogFiles, " "),
 			"taskDir":         r.taskDir,
@@ -305,6 +307,9 @@ func (r *GoApplyBinlog) Init() error {
 	if err = r.ToolSet.Merge(toolset); err != nil {
 		return err
 	}
+	// 根据 mysql server 版本，选择 mysql 客户端(binlog 解析用 gomysqlbinlog，不受版本影响)
+	r.mysqlClientBin, _ = pickMysqlToolsByServerVersion(
+		getMysqlServerVersion(r.dbWorker, &r.TgtInstance))
 
 	if r.BinlogOpt.Flashback {
 		if r.SourceBinlogFormat != "ROW" {
@@ -367,7 +372,7 @@ func (r *GoApplyBinlog) Init() error {
 		if err != nil {
 			return errors.Wrap(err, "目标实例连接失败")
 		}
-		if ret, err := r.TgtInstance.MySQLClientExec(r.ToolSet.MustGet(tools.ToolMysqlclient), "select 1"); err != nil {
+		if ret, err := r.TgtInstance.MySQLClientExec(r.mysqlClientBin, "select 1"); err != nil {
 			return err
 		} else if strings.Contains(ret, "ERROR ") {
 			logger.Error("MySQLClientExec failed: %w %s", ret, err)
@@ -413,21 +418,10 @@ func (r *GoApplyBinlog) buildMysqlCliOptions() error {
 		r.TgtInstance.Options += fmt.Sprintf(" --max-allowed-packet=%d", mysqlOpt.MaxAllowedPacket)
 	}
 
-	var mysqlClient string
-	if mysqlClient80, err := r.ToolSet.Get(tools.ToolMysqlclient80); err == nil {
-		// 需要确认 dba-toolkit 下的 mysql 8.0 客户端可以用
-		if err = mysqlcomm.MysqlCliHasOption(mysqlClient80, "--help"); err == nil {
-			mysqlClient = mysqlClient80
-		} else {
-			logger.Info("try use mysql client 8.0 got error:", err.Error())
-		}
-	}
-	if mysqlClient == "" {
-		mysqlClient = r.ToolSet.MustGet(tools.ToolMysqlclient)
-		logger.Info("fallback to system mysql client: %s", mysqlClient)
-	}
-	// mysqlOpt.BinaryMode &&
+	// mysql client 已在 Init 里根据 mysql server 版本选择好
+	mysqlClient := r.mysqlClientBin
 	// mysql 8.0 客户端 在 --binary-mode 下执行 DELIMITER 会报错，所以 8.0 客户端不加 --binary-mode
+	// 注意这里看的是 mysql client 版本
 	cliVersion, err := mysqlcomm.MysqlCliVersion(mysqlClient)
 	if err != nil {
 		logger.Warn("get mysql client version failed: %s", err.Error())
